@@ -1,0 +1,109 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import rospy
+from geometry_msgs.msg import PointStamped, Twist, Pose
+from moveit_commander import MoveGroupCommander
+from tf.transformations import quaternion_from_euler
+
+class VisualServoingController:
+    def __init__(self):
+        rospy.init_node('ur3_visual_servoing_node', anonymous=True)
+
+        # Initialize move group for UR3 manipulator
+        self.move_group = MoveGroupCommander("ur3_arm")
+
+        # Define initial target pose (you can set this based on a received message as well)
+        self.set_initial_pose()
+
+        # Control parameters
+        self.Z = 50
+        self.f = 400
+        self.p = 400
+        self.Lambda = 0.1
+
+        # Publisher for real-time control velocity
+        self.vel_pub = rospy.Publisher('/ur3_velocity_controller/cmd_vel', Twist, queue_size=10)
+
+        # Subscribers for the 3D pattern points
+        rospy.Subscriber('/pattern1_3d', PointStamped, self.pattern1_callback)
+        rospy.Subscriber('/pattern2_3d', PointStamped, self.pattern2_callback)
+
+    def set_initial_pose(self):
+        target_pose = Pose()
+        target_pose.position.x = 0.5
+        target_pose.position.y = 0.0
+        target_pose.position.z = 0.3
+        quat = quaternion_from_euler(0, 0, 0)  # Modify based on required orientation
+        target_pose.orientation.x = quat[0]
+        target_pose.orientation.y = quat[1]
+        target_pose.orientation.z = quat[2]
+        target_pose.orientation.w = quat[3]
+
+        self.move_group.set_pose_target(target_pose)
+        self.move_group.go(wait=True)
+        rospy.sleep(1)
+
+    def compute_control_velocity(self, Obsxy, Target):
+        xy = (Target - self.p) / self.f
+        Obsxy = (Obsxy - self.p) / self.f
+
+        n = Target.shape[0]
+        Lx = []
+        for i in range(n):
+            Lxi = self.FuncLx(Obsxy[i, 0], Obsxy[i, 1], self.Z, self.Lambda)
+            Lx.append(Lxi)
+        Lx = np.vstack(Lx)
+
+        e2 = Obsxy - xy
+        e = e2.T.reshape(-1, 1)
+        Lx2 = np.linalg.inv(Lx.T @ Lx) @ Lx.T
+        Vc = -self.Lambda * Lx2 @ e
+        return Vc
+
+    def FuncLx(self, x, y, Z, lambda_):
+        Lx = np.zeros((2, 6))
+        Lx[0, 0] = -lambda_ / Z
+        Lx[0, 1] = 0
+        Lx[0, 2] = x / Z
+        Lx[0, 3] = x * y / lambda_
+        Lx[0, 4] = -(lambda_ ** 2 + x ** 2) / lambda_
+        Lx[0, 5] = y
+
+        Lx[1, 0] = 0
+        Lx[1, 1] = -lambda_ / Z
+        Lx[1, 2] = y / Z
+        Lx[1, 3] = (lambda_ ** 2 + y ** 2) / lambda_
+        Lx[1, 4] = -x * y / lambda_
+        Lx[1, 5] = -x
+
+        return Lx
+
+    def pattern1_callback(self, msg):
+        # Define target and obstacle points based on msg data for pattern 1
+        Target = np.array([[0, 0], [800, 0], [0, 800], [800, 800]])
+        Obs = Target + 50
+        Vc = self.compute_control_velocity(Obs, Target)
+        
+        # Create Twist message for control velocity
+        twist_msg = Twist()
+        twist_msg.linear.x = Vc[0]
+        twist_msg.linear.y = Vc[1]
+        twist_msg.linear.z = Vc[2]
+        twist_msg.angular.x = Vc[3]
+        twist_msg.angular.y = Vc[4]
+        twist_msg.angular.z = Vc[5]
+
+        # Publish the control velocity
+        self.vel_pub.publish(twist_msg)
+
+    def pattern2_callback(self, msg):
+        # Similar implementation for pattern 2 with different target/obstacle configurations if needed
+        pass
+
+if __name__ == '__main__':
+    try:
+        controller = VisualServoingController()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass

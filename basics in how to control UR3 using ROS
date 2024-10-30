@@ -1,0 +1,29 @@
+export ROS_IP=<your_laptop_ip>
+export ROS_MASTER_URI=http://<your_robot_ip>:11311
+
+sudo apt install ros-<your_ros_distro>-ur-driver
+
+roslaunch ur_robot_driver ur3_bringup.launch robot_ip:=<ur3_robot_ip>
+
+sudo apt install ros-<your_ros_distro>-usb-cam
+
+roslaunch usb_cam usb_cam-test.launch
+
+import rospy
+from geometry_msgs.msg import Pose
+from moveit_commander import MoveGroupCommander
+
+rospy.init_node('ur3_motion')
+
+group = MoveGroupCommander("ur3_arm")
+target_pose = Pose()
+
+# Define target position and orientation
+target_pose.position.x = 0.5
+target_pose.position.y = 0.0
+target_pose.position.z = 0.3
+target_pose.orientation.w = 1.0
+
+group.set_pose_target(target_pose)
+group.go(wait=True)
+rospy.sleep(1)

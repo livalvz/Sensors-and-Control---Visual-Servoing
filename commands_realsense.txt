@@ -1,0 +1,21 @@
+Real Sense camera to open
+--> first need to prioritise something:
+
+export LD_LIBRARY_PATH=/opt/ros/noetic/lib/x86_64-linux-gnu:$LD_LIBRARY_PATH
+
+then run the roslaunch command:
+
+roslaunch realsense2_camera rs_camera.launch
+
+
+
+
+USE THESE:
+roslaunch realsense2_camera rs_d435_camera_with_model.launch 
+
+rosrun visual_servoing pattern_recognition_node.py
+
+rostopic echo /pattern_pose
+rostopic echo /visual_servoing/error
+
+^ the last one provides the coordinates to move

@@ -1,0 +1,79 @@
+#!/usr/bin/env python3
+
+import numpy as np
+import rospy
+from std_msgs.msg import Float64MultiArray  # Or appropriate message type based on your data
+
+class VisualServoing:
+    def __init__(self):
+        rospy.init_node('visual_servoing_node', anonymous=True)
+        
+        # Parameters
+        self.Z = 50
+        self.f = 400
+        self.p = 400
+        self.Lambda = 0.1
+
+        # Define target and obstacle points
+        self.Target = np.array([[0, 0],
+                                [800, 0],
+                                [0, 800],
+                                [800, 800]])
+
+        self.Obs = self.Target + 50
+        self.xy = (self.Target - self.p) / self.f
+        self.Obsxy = (self.Obs - self.p) / self.f
+
+        # Publisher for control velocities
+        self.vel_pub = rospy.Publisher('/control_velocity', Float64MultiArray, queue_size=10)
+
+        # Run computation
+        self.compute_control_velocity()
+
+    def compute_control_velocity(self):
+        # Calculate Lx matrix
+        n = self.Target.shape[0]
+        Lx = []
+        for i in range(n):
+            Lxi = self.FuncLx(self.Obsxy[i, 0], self.Obsxy[i, 1], self.Z, self.Lambda)
+            Lx.append(Lxi)
+        Lx = np.vstack(Lx)
+
+        # Calculate error and control velocity
+        e2 = self.Obsxy - self.xy
+        e = e2.T.reshape(-1, 1)
+        de = -e * self.Lambda
+
+        Lx2 = np.linalg.inv(Lx.T @ Lx) @ Lx.T
+        Vc = -self.Lambda * Lx2 @ e
+
+        # Publish the control velocity
+        control_msg = Float64MultiArray(data=Vc.flatten())
+        self.vel_pub.publish(control_msg)
+        rospy.loginfo("Published control velocity: %s", Vc.flatten())
+
+    @staticmethod
+    def FuncLx(x, y, Z, lambda_):
+        Lx = np.zeros((2, 6))
+        Lx[0, 0] = -lambda_ / Z
+        Lx[0, 1] = 0
+        Lx[0, 2] = x / Z
+        Lx[0, 3] = x * y / lambda_
+        Lx[0, 4] = -(lambda_ ** 2 + x ** 2) / lambda_
+        Lx[0, 5] = y
+
+        Lx[1, 0] = 0
+        Lx[1, 1] = -lambda_ / Z
+        Lx[1, 2] = y / Z
+        Lx[1, 3] = (lambda_ ** 2 + y ** 2) / lambda_
+        Lx[1, 4] = -x * y / lambda_
+        Lx[1, 5] = -x
+
+        return Lx
+
+if __name__ == '__main__':
+    try:
+        visual_servoing = VisualServoing()
+        rospy.spin()
+    except rospy.ROSInterruptException:
+        pass

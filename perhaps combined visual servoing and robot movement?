@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 
+import moveit_commander
 import numpy as np
 import rospy
 from geometry_msgs.msg import PointStamped, Twist, Pose
-from moveit_commander import MoveGroupCommander
 from tf.transformations import quaternion_from_euler
 
 class VisualServoingController:

@@ -1,26 +1,27 @@
 #!/usr/bin/env python3
 
-import moveit_commander
+from moveit_commander import move_group
 import numpy as np
 import rospy
+import cv2
 from geometry_msgs.msg import PointStamped, Twist, Pose
-from tf.transformations import quaternion_from_euler
+from tf.transformations import quaternion_from_euler, euler_from_matrix
 
 class VisualServoingController:
     def __init__(self):
         rospy.init_node('ur3_visual_servoing_node', anonymous=True)
 
         # Initialize move group for UR3 manipulator
-        self.move_group = MoveGroupCommander("ur3_arm")
+        self.move_group = move_group.MoveGroupCommander("ur3_arm")
 
         # Define initial target pose (you can set this based on a received message as well)
         self.set_initial_pose()
 
         # Control parameters
-        self.Z = 50
-        self.f = 400
-        self.p = 400
-        self.Lambda = 0.1
+        self.f = 400  # Focal length
+        self.p = 400  # Principal point offset
+        self.Lambda = 0.1  # Gain
+        self.Z = 1.0  # Initial depth estimate; will be updated dynamically
 
         # Publisher for real-time control velocity
         self.vel_pub = rospy.Publisher('/ur3_velocity_controller/cmd_vel', Twist, queue_size=10)
@@ -34,7 +35,7 @@ class VisualServoingController:
         target_pose.position.x = 0.5
         target_pose.position.y = 0.0
         target_pose.position.z = 0.3
-        quat = quaternion_from_euler(0, 0, 0)  # Modify based on required orientation
+        quat = quaternion_from_euler(0, 0, 0)
         target_pose.orientation.x = quat[0]
         target_pose.orientation.y = quat[1]
         target_pose.orientation.z = quat[2]
@@ -44,7 +45,65 @@ class VisualServoingController:
         self.move_group.go(wait=True)
         rospy.sleep(1)
 
+    def pattern1_callback(self, msg):
+        # Retrieve 3D coordinates for pattern from msg (assuming PointStamped format)
+        target_x, target_y, target_z = msg.point.x, msg.point.y, msg.point.z
+
+        # Update the depth estimate
+        self.Z = target_z
+
+        # Define the current observation point (where the pattern is actually detected)
+        Obs = np.array([[target_x, target_y]])
+
+        # Define the target (desired) position in image coordinates (modify as necessary)
+        Target = np.array([[self.p, self.p]])  # Assuming you want the pattern centered
+
+        # Calculate control velocity with dynamic target
+        Vc = self.compute_control_velocity(Obs, Target)
+
+        # Create Twist message for control velocity
+        twist_msg = Twist()
+        twist_msg.linear.x = Vc[0]
+        twist_msg.linear.y = Vc[1]
+        twist_msg.linear.z = Vc[2]
+        twist_msg.angular.x = Vc[3]
+        twist_msg.angular.y = Vc[4]
+        twist_msg.angular.z = Vc[5]
+
+        # Publish the control velocity
+        self.vel_pub.publish(twist_msg)
+
+    def pattern2_callback(self, msg):
+        # Similar implementation for pattern 2 if needed
+        pass
+
+    def get_roll_pitch_yaw(self, rvec):
+        # Convert rotation vector to rotation matrix
+        rotation_matrix, _ = cv2.Rodrigues(rvec)
+
+        # Convert rotation matrix to roll, pitch, yaw
+        roll, pitch, yaw = euler_from_matrix(rotation_matrix)
+        return roll, pitch, yaw
+
+    def set_target_pose(self, target_x, target_y, target_z, roll, pitch, yaw):
+        target_pose = Pose()
+        target_pose.position.x = target_x
+        target_pose.position.y = target_y
+        target_pose.position.z = target_z
+
+        # Convert roll, pitch, yaw to quaternion
+        quat = quaternion_from_euler(roll, pitch, yaw)
+        target_pose.orientation.x = quat[0]
+        target_pose.orientation.y = quat[1]
+        target_pose.orientation.z = quat[2]
+        target_pose.orientation.w = quat[3]
+
+        # Set and move to the target pose
+        self.move_group.set_pose_target(target_pose)
+        self.move_group.go(wait=True)
+
     def compute_control_velocity(self, Obsxy, Target):
+        # Scale the observations and target coordinates to match the image plane parameters
         xy = (Target - self.p) / self.f
         Obsxy = (Obsxy - self.p) / self.f
 
@@ -55,6 +114,7 @@ class VisualServoingController:
             Lx.append(Lxi)
         Lx = np.vstack(Lx)
 
+        # Calculate error and control velocity
         e2 = Obsxy - xy
         e = e2.T.reshape(-1, 1)
         Lx2 = np.linalg.inv(Lx.T @ Lx) @ Lx.T
@@ -78,28 +138,6 @@ class VisualServoingController:
         Lx[1, 5] = -x
 
         return Lx
-
-    def pattern1_callback(self, msg):
-        # Define target and obstacle points based on msg data for pattern 1
-        Target = np.array([[0, 0], [800, 0], [0, 800], [800, 800]])
-        Obs = Target + 50
-        Vc = self.compute_control_velocity(Obs, Target)
-        
-        # Create Twist message for control velocity
-        twist_msg = Twist()
-        twist_msg.linear.x = Vc[0]
-        twist_msg.linear.y = Vc[1]
-        twist_msg.linear.z = Vc[2]
-        twist_msg.angular.x = Vc[3]
-        twist_msg.angular.y = Vc[4]
-        twist_msg.angular.z = Vc[5]
-
-        # Publish the control velocity
-        self.vel_pub.publish(twist_msg)
-
-    def pattern2_callback(self, msg):
-        # Similar implementation for pattern 2 with different target/obstacle configurations if needed
-        pass
 
 if __name__ == '__main__':
     try:
